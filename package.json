@@ -8,7 +8,7 @@
     "dev": "nodemon start.js",
     "db:up": "docker-compose up -d",
     "db:down": "docker-compose down",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "author": "Carolina, Cecilia, Tatiana, Massimo",
   "license": "MIT",
@@ -21,6 +21,8 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "jest": "^29.7.0",
+    "nodemon": "^2.0.22",
+    "supertest": "^7.1.1"
   }
 }

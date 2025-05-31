@@ -14,25 +14,63 @@ const mongoose = require('mongoose');
 // Loads environment variables from .env file
 require('dotenv').config();
 
+// Unique IDs
+const registeredChairIds = [];
 
-const registeredChairIds = []; // Qui salveremo gli ID univoci
-
-
+// Import the body-parser middleware to parse incoming request bodies (e.g. JSON, form data)
 const bodyParser = require('body-parser');
+
+// Import the CORS middleware to enable Cross-Origin Resource Sharing
 const cors = require('cors');
+
+// Import the path module to work with file and directory paths
 const path = require('path');
 
-// Initialize Express app and HTTP server
+// Initialize Express app
 const app = express();
-const server = http.createServer(app); // Create HTTP server with Express app
 
+// Create HTTP server with Express app
+const server = http.createServer(app);
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+
+// Set the MongoDB connection URI
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/smartchair';
+
+// Initializes Socket.IO for real-time communication, allowing cross-origin requests via WebSockets
 const io = socketIo(server, {
     cors: {
-        origin: "*", // O metti l'origine specifica come 
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
+// Define the schema for posture data documents in MongoDB
+// This schema describes how each document (record) is structured
+const PostureDataSchema = new mongoose.Schema({
+    chairId: String,
+    timestamp: { type: Date, default: Date.now },
+    sensors: [{ value: Number }],
+    poseData: Object,
+    postureStatus: String
+});
+
+// Create a Mongoose model called 'PostureData'
+const PostureData = mongoose.model('PostureData', PostureDataSchema);
+
+// Connect to MongoDB using Mongoose
+mongoose.connect(MONGODB_URI)
+    .then(() => console.log('MongoDB connected'))
+    .catch(err => console.error('MongoDB connection error:', err));
+
+/*
+* Registers a chair ID if it's not already present in the list
+*
+* parameters: id (string): The unique identifier of the chair to register
+* return: void
+*/
 function registerChairId(id) {
     if (!registeredChairIds.includes(id)) {
         registeredChairIds.push(id);
@@ -41,35 +79,18 @@ function registerChairId(id) {
 }
 
 
-// Middleware
-app.use(cors());
-app.use(bodyParser.json());
-
-// Set the MongoDB connection URI (from env or default to localhost)
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/smartchair';
-
-// Connect to MongoDB using Mongoose
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
-// Define the schema for posture data documents
-const PostureDataSchema = new mongoose.Schema({
-  chairId: String,
-  timestamp: { type: Date, default: Date.now }, // When the data was recorded
-  sensors: [{ value: Number }],
-  poseData: Object,
-  postureStatus: String
-});
-
-const PostureData = mongoose.model('PostureData', PostureDataSchema);
-
-// Evaluate posture based on sensor data
-
-
-
-
-function evaluatePosture(sensorData, poseData = null) {
+/*
+* Evaluates the posture based on pressure sensor data from the chair
+*
+* parameter: sensorData (Array): An array of objects, each with a `value` field representing pressure from one sensor
+*
+* return:
+*   - string: The evaluated posture status, one of:
+*       - 'not_sitting' if total pressure is very low
+*       - 'poor' if there's a strong imbalance between left and right sides
+*       - 'good' if posture is balanced and properly supported
+*/
+function evaluatePosture(sensorData) {
   const sensorValues = sensorData.map(s => s.value);
   
   // Check if weight distribution is balanced
@@ -92,44 +113,41 @@ function evaluatePosture(sensorData, poseData = null) {
   // Check if weight is distributed toward the back (good support)
   const backWeight = sensorValues[2] + sensorValues[3];
   const frontWeight = sensorValues[0] + sensorValues[1];
-  
-  if (backWeight < frontWeight * 0.8) {
-    return 'leaning_forward';
-  }
 
   return 'good';
 }
 
-// Function to analyze posture from PoseNet keypoints
+
+/*
+* Analyzes PoseNet keypoints to determine posture quality
+*
+* parameter: keypoints (Array): List of keypoint objects detected by PoseNet, each with part, score, and position
+* return: string: Posture status ('not_sitting', 'poor', or 'good')
+*/
 function analyzePoseNetPosture(keypoints) {
+
+    // Extract relevant keypoints
     const nose = keypoints.find(kp => kp.part === 'nose');
     const leftShoulder = keypoints.find(kp => kp.part === 'leftShoulder');
     const rightShoulder = keypoints.find(kp => kp.part === 'rightShoulder');
     const leftEar = keypoints.find(kp => kp.part === 'leftEar');
     const rightEar = keypoints.find(kp => kp.part === 'rightEar');
 
+    // Check if essential keypoints are present and reliable
     if (!nose || !leftShoulder || !rightShoulder ||
         nose.score < 0.3 || leftShoulder.score < 0.3 || rightShoulder.score < 0.3) {
         return 'not_sitting';
     }
 
+    // Evaluate shoulder alignment
     const shoulderDiff = Math.abs(leftShoulder.position.y - rightShoulder.position.y);
     const shoulderDistance = Math.abs(leftShoulder.position.x - rightShoulder.position.x);
-
 
     if (shoulderDiff > shoulderDistance * 0.2) {
         return 'poor';
     }
 
-    const shoulderCenterY = (leftShoulder.position.y + rightShoulder.position.y) / 2;
-    const headForwardRatio = (nose.position.y - shoulderCenterY) / shoulderDistance;
-
-
-    // Applica controllo SOLO se le spalle sono abbastanza larghe
-    /*if (shoulderDistance > 80 && headForwardRatio < -0.6) {
-        return 'leaning_forward';
-    }*/
-
+    // Evaluate ear symmetry if both ears are detected reliably
     if (leftEar && rightEar && leftEar.score > 0.5 && rightEar.score > 0.5) {
         const earDiff = Math.abs(leftEar.position.y - rightEar.position.y);
         const earDistance = Math.abs(leftEar.position.x - rightEar.position.x);
@@ -144,65 +162,75 @@ function analyzePoseNetPosture(keypoints) {
 }
 
 
-// Routes
+/////////////////////////////////// Routes
+
 
 // Route to check if the server is running correctly (health check endpoint)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'Server is running' });
 });
-// Endpoint per ottenere gli ID sedia registrati
+
+
+// Endpoint to retrieve all registered chair IDs that have sent data recently
 app.get('/api/chairids', async (req, res) => {
     try {
+        // Define a time window (1 hour ago)
         const oneMinuteAgo = new Date(Date.now() - 3600 * 1000);
 
-        // Ottieni gli ID con dati recenti dal DB
+        // Query the database for unique chair IDs that have sent data within the last hour
         const activeChairIds = await PostureData.find({ timestamp: { $gte: oneMinuteAgo } })
             .distinct('chairId');
 
-
-
+        // Respond with the list of active chair IDs
         res.json({ ids: activeChairIds });
+
     } catch (err) {
         console.error('Errore nella ricerca dei chairId attivi:', err);
         res.status(500).json({ error: 'Errore server' });
     }
 });
 
+
+
+// Endpoint to receive sensor data from the smart chair
 app.post('/chair', async (req, res) => {
     try {
-        console.log('Received chair data:'/*, req.body*/);
+        console.log('Received chair data:');    // Debug
 
         const sensorData = req.body.sensors;
         const chairId = req.body.id || 'unknown';
 
-        // Registra l'ID se non � gi� presente
+        // Register the chair ID if it's not already tracked
         registerChairId(chairId);
 
+        // Validate that sensorData is present and is an array
         if (!sensorData || !Array.isArray(sensorData)) {
             console.error('Invalid sensor data format:', req.body);
             return res.status(400).json({ error: 'Invalid sensor data format' });
         }
 
+        // Analyze the posture using sensor values
         const postureStatus = evaluatePosture(sensorData);
 
+        // Create a new document with the posture data
         const postureRecord = new PostureData({
             chairId,
             sensors: sensorData,
             postureStatus
         });
 
+        // Save the data to MongoDB
         await postureRecord.save();
 
-        // Invia solo ai client iscritti a questa sedia
         io.emit('chairData', {
             chairId,
             sensors: sensorData,
             timestamp: new Date(),
             postureStatus,
-            source: 'sensors'         // <--- AGGIUNGI QUESTO
+            source: 'sensors'         // Identify data source as sensor-based
         });
 
-
+        // Respond with success message and posture result
         res.status(200).json({
             message: 'Data received successfully',
             postureStatus
@@ -214,21 +242,26 @@ app.post('/chair', async (req, res) => {
 });
 
 
-
+// Endpoint to receive posture data from PoseNet keypoints
 app.post('/posenet', async (req, res) => {
     try {
-        console.log('Received PoseNet data');
+        console.log('Received PoseNet data'); // Debug
 
+        // Extract chair ID and PoseNet keypoints from the request body
         const { chairId, keypoints } = req.body;
 
+        // Register the chair ID if not already known
         registerChairId(chairId);
 
+        // Validate that keypoints data is provided and is an array
         if (!keypoints || !Array.isArray(keypoints)) {
             return res.status(400).json({ error: 'Invalid keypoints data' });
         }
 
+        // Analyze posture based on the keypoints
         const posePosture = analyzePoseNetPosture(keypoints);
 
+        // Create a new posture record and store it in MongoDB
         const postureRecord = new PostureData({
             chairId,
             poseData: { keypoints },
@@ -237,16 +270,15 @@ app.post('/posenet', async (req, res) => {
 
         await postureRecord.save();
 
-        // Invia solo ai client iscritti a questa sedia
         io.emit('postureUpdate', {
             chairId,
             postureStatus: posePosture,
             hasPoseData: true,
-            source: 'posenet',         // <--- AGGIUNGI QUESTO
+            source: 'posenet',         // Indicates that the data came from PoseNet
             timestamp: new Date()
         });
 
-
+        // Respond with a success message and posture evaluation
         res.json({
             message: 'PoseNet data received successfully',
             postureStatus: posePosture
@@ -258,89 +290,54 @@ app.post('/posenet', async (req, res) => {
 });
 
 
-
-// Get historical posture data
-app.get('/api/history/:chairId', async (req, res) => {
-  try {
-    const { chairId } = req.params;
-    const { limit = 100, from, to } = req.query;
-    
-    const query = { chairId };
-    
-    if (from || to) {
-      query.timestamp = {};
-      if (from) query.timestamp.$gte = new Date(from);
-      if (to) query.timestamp.$lte = new Date(to);
-    }
-    
-    const history = await PostureData.find(query)
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .select('-__v');
-    
-    res.json(history);
-  } catch (error) {
-    console.error('Error retrieving history:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
+// Handle new WebSocket client connections
 io.on('connection', (socket) => {
     console.log('Client connected');
 
-    // Il client sceglie una sedia a cui iscriversi
-    /*socket.on('subscribeToChair', (chairId) => {
-        console.log(`Client subscribed to ${chairId}`);
-        socket.join(chairId);
-    });
-
-    // Riceve dati PoseNet via socket invece che via POST
-    /*socket.on('poseData', async (data) => {
-        try {
-            console.log('Received PoseNet data via Socket.IO');
-
-            const { chairId, keypoints } = data;
-            registerChairId(chairId);
-
-            if (!keypoints || !Array.isArray(keypoints)) {
-                console.error('Invalid keypoints data received via socket');
-                return;
-            }
-
-            const posePosture = analyzePoseNetPosture(keypoints);
-
-            const postureRecord = new PostureData({
-                chairId,
-                poseData: { keypoints },
-                postureStatus: posePosture
-            });
-
-            await postureRecord.save();
-
-            // Invia solo ai client nella stanza giusta
-            io.to(chairId).emit('postureUpdate', {
-                chairId,
-                postureStatus: posePosture,
-                hasPoseData: true,
-                timestamp: new Date()
-            });
-
-        } catch (error) {
-            console.error('Error processing PoseNet data via socket:', error);
-        }
-    });*/
-
+    // Handle client disconnection
     socket.on('disconnect', () => {
         console.log('Client disconnected');
     });
 });
 
 
-// Start server
+// Start the HTTP server and listen on the specified port
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
 
+module.exports = {
+    app,
+    evaluatePosture,
+    analyzePoseNetPosture
+};
+
+
+/*// Get historical posture data
+app.get('/api/history/:chairId', async (req, res) => {
+  try {
+    const { chairId } = req.params;
+    const { limit = 100, from, to } = req.query;
+
+    const query = { chairId };
+
+    if (from || to) {
+      query.timestamp = {};
+      if (from) query.timestamp.$gte = new Date(from);
+      if (to) query.timestamp.$lte = new Date(to);
+    }
+
+    const history = await PostureData.find(query)
+      .sort({ timestamp: -1 })
+      .limit(parseInt(limit))
+      .select('-__v');
+
+    res.json(history);
+  } catch (error) {
+    console.error('Error retrieving history:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});*/
 
