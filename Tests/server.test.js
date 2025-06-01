@@ -22,6 +22,18 @@ describe('evaluatePosture', () => {
         const result = evaluatePosture([{ value: 100 }, { value: 100 }, { value: 100 }, { value: 100 }]);
         expect(result).toBe('good');
     });
+
+    // Test: should return "lean_forwarding" when front weight is significantly higher than back
+    test('should return "lean_forwarding" when front sensors have much more weight than back sensors', () => {
+        const result = evaluatePosture([
+            { value: 30 }, 
+            { value: 20 }, 
+            { value: 130 },  
+            { value: 120 }
+        ]);
+        expect(result).toBe('lean_forwarding');
+    });
+
 });
 
 

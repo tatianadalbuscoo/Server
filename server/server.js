@@ -91,30 +91,36 @@ function registerChairId(id) {
 *       - 'good' if posture is balanced and properly supported
 */
 function evaluatePosture(sensorData) {
-  const sensorValues = sensorData.map(s => s.value);
+    const sensorValues = sensorData.map(s => s.value);
   
-  // Check if weight distribution is balanced
-  const leftSide = sensorValues[0] + sensorValues[2];
-  const rightSide = sensorValues[1] + sensorValues[3];
+    // Check if weight distribution is balanced
+    const leftSide = sensorValues[0] + sensorValues[2];
+    const rightSide = sensorValues[1] + sensorValues[3];
   
-  const difference = Math.abs(leftSide - rightSide);
-  const totalWeight = sensorValues.reduce((sum, val) => sum + val, 0);
-  
-  // If total weight is too low, person is not sitting
-  if (totalWeight < 200) {
-    return 'not_sitting';
-  }
-  
-  // If imbalance exceeds 30% of total weight, posture is poor
-  if (difference > totalWeight * 0.3) {
-    return 'poor';
-  }
-  
-  // Check if weight is distributed toward the back (good support)
-  const backWeight = sensorValues[2] + sensorValues[3];
-  const frontWeight = sensorValues[0] + sensorValues[1];
+    const difference = Math.abs(leftSide - rightSide);
+    const totalWeight = sensorValues.reduce((sum, val) => sum + val, 0);
 
-  return 'good';
+    // Calculate front and back weights
+    const backWeight = sensorValues[0] + sensorValues[1];
+    const frontWeight = sensorValues[2] + sensorValues[3];
+  
+    // If total weight is too low, person is not sitting
+    if (totalWeight < 200) {
+        return 'not_sitting';
+    }
+
+    // If the front end has much more weight than the back end, it is leaning forward.
+    if (frontWeight > backWeight * 1.5) {
+        return 'lean_forwarding';
+    }
+  
+    // If imbalance exceeds 30% of total weight, posture is poor
+    if (difference > totalWeight * 0.3) {
+        return 'poor';
+    }
+  
+
+    return 'good';
 }
 
 
